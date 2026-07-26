@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createApp } from '../server/index.js';
+// Import the compiled server bundle. Vercel builds the TypeScript server into
+// dist-server before tracing this function, avoiding runtime .tsx resolution.
+import { createApp } from '../dist-server/server/index.js';
 
 let appPromise: ReturnType<typeof createApp> | undefined;
 

@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/share", "destination": "/api/share" },
+    { "source": "/share/:path*", "destination": "/api/share/:path*" }
+  ],
+  "functions": {
+    "api/[...path].ts": {
+      "maxDuration": 120
+    }
+  }
+}

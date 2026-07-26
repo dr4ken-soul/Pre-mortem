@@ -116,17 +116,20 @@ async function oklinkMarket(address: string, chain: AnalysisRequest['chainId']):
   const signingKey = secretKey;
   const accessPassphrase = passphrase;
 
-  async function request<T>(requestPath: string): Promise<T | null> {
+  async function request<T>(requestPath: string, method: 'GET' | 'POST' = 'GET', body?: string): Promise<T | null> {
     const timestamp = new Date().toISOString();
-    const signature = createHmac('sha256', signingKey).update(`${timestamp}GET${requestPath}`).digest('base64');
+    const signature = createHmac('sha256', signingKey).update(`${timestamp}${method}${requestPath}${body ?? ''}`).digest('base64');
     try {
       const response = await withTimeout(fetch(`https://web3.okx.com${requestPath}`, {
+        method,
         headers: {
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
           'OK-ACCESS-KEY': accessKey,
           'OK-ACCESS-SIGN': signature,
           'OK-ACCESS-PASSPHRASE': accessPassphrase,
           'OK-ACCESS-TIMESTAMP': timestamp,
         },
+        body,
       }));
       if (!response.ok) return null;
       const json = await response.json() as { code?: string; data?: T };
@@ -138,17 +141,25 @@ async function oklinkMarket(address: string, chain: AnalysisRequest['chainId']):
     request<Array<{ circulatingSupply?: string; positionList?: Array<{ amount?: string }> }>>(`/api/v5/xlayer/token/position-list?chainShortName=XLAYER&tokenContractAddress=${encodeURIComponent(address)}&limit=50`),
     request<Array<{ tokenList?: Array<{ addressCount?: string; price?: string; transactionAmount24h?: string; tvl?: string; totalMarketCap?: string }> }>>(`/api/v5/xlayer/token/token-list?chainShortName=XLAYER&tokenContractAddress=${encodeURIComponent(address)}&limit=1`),
   ]);
+  const priceInfo = await request<Array<{
+    price?: string;
+    marketCap?: string;
+    liquidity?: string;
+    volume24h?: string;
+    holders?: string;
+  }>>('/api/v6/dex/market/price-info', 'POST', JSON.stringify([{ chainIndex: '196', tokenContractAddress: address.toLowerCase() }]));
   const positions = holderData?.[0]?.positionList ?? [];
   const token = tokenData?.[0]?.tokenList?.[0];
   const circulatingSupply = Number(holderData?.[0]?.circulatingSupply);
   const topAmount = positions.slice(0, 3).reduce((sum, position) => sum + Number(position.amount ?? 0), 0);
+  const market = priceInfo?.[0];
   return {
     topThreePercent: circulatingSupply > 0 && positions.length ? Math.round((topAmount / circulatingSupply) * 10000) / 100 : null,
-    holderCount: token?.addressCount ? Number(token.addressCount) : null,
-    priceUsd: token?.price ?? null,
-    volume24h: token?.transactionAmount24h ? Number(token.transactionAmount24h) : null,
-    liquidityUsd: token?.tvl ? Number(token.tvl) : null,
-    marketCapUsd: token?.totalMarketCap ? Number(token.totalMarketCap) : null,
+    holderCount: market?.holders ? Number(market.holders) : token?.addressCount ? Number(token.addressCount) : null,
+    priceUsd: market?.price ?? token?.price ?? null,
+    volume24h: market?.volume24h ? Number(market.volume24h) : token?.transactionAmount24h ? Number(token.transactionAmount24h) : null,
+    liquidityUsd: market?.liquidity ? Number(market.liquidity) : token?.tvl ? Number(token.tvl) : null,
+    marketCapUsd: market?.marketCap ? Number(market.marketCap) : token?.totalMarketCap ? Number(token.totalMarketCap) : null,
   };
 }
 
@@ -297,9 +308,10 @@ async function dexLiquidity(address: string, chain: AnalysisRequest['chainId']) 
   try {
     const response = await withTimeout(fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`));
     if (!response.ok) return null;
-    const json = await response.json() as { pairs?: Array<{ chainId?: string; priceUsd?: string; baseToken?: { address?: string }; liquidity?: { usd?: number }; marketCap?: number; fdv?: number; volume?: { h24?: number }; txns?: { h24?: { buys?: number; sells?: number } } }> };
-    const expected = chain === 'base' ? 'base' : 'xlayer';
-    const pairs = (json.pairs ?? []).filter((pair) => pair.chainId === expected && pair.baseToken?.address?.toLowerCase() === address.toLowerCase());
+    const json = await response.json() as { pairs?: Array<{ chainId?: string; priceUsd?: string; baseToken?: { address?: string }; quoteToken?: { address?: string }; liquidity?: { usd?: number }; marketCap?: number; fdv?: number; volume?: { h24?: number }; txns?: { h24?: { buys?: number; sells?: number } } }> };
+    const expected = chain === 'base' ? ['base'] : ['xlayer', 'x-layer'];
+    const tokenAddress = address.toLowerCase();
+    const pairs = (json.pairs ?? []).filter((pair) => expected.includes(pair.chainId ?? '') && (pair.baseToken?.address?.toLowerCase() === tokenAddress || pair.quoteToken?.address?.toLowerCase() === tokenAddress));
     const pair = pairs.sort((left, right) => (right.liquidity?.usd ?? 0) - (left.liquidity?.usd ?? 0))[0];
     if (!pair?.liquidity?.usd) return null;
     const marketCap = pair.marketCap || pair.fdv || 0;

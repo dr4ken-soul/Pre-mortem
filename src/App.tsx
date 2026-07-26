@@ -27,6 +27,7 @@ function Dashboard() {
   const runAnalysis = useCallback(async () => {
     if (submitting || state.systemStatus === 'scanning') return;
     setSubmitting(true);
+    state.begin(`pending-${Date.now()}`);
     try {
       const result = await createAnalysis(state);
       setSupplyInCell(false);

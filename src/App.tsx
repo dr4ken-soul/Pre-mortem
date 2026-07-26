@@ -11,6 +11,7 @@ import { VerdictCell } from './components/VerdictCell';
 import { ShareCardPage } from './components/ShareCardPage';
 import { createAnalysis, streamAnalysis } from './lib/api';
 import { useAnalysisStore } from './store';
+import type { LensCompleteEvent, VerdictResult } from './types';
 
 export default function App() {
   if (window.location.pathname.startsWith('/share/')) return <ShareCardPage />;
@@ -24,10 +25,23 @@ function Dashboard() {
 
   const runAnalysis = useCallback(async () => {
     try {
-      const id = await createAnalysis(state);
+      const result = await createAnalysis(state);
       setSupplyInCell(false);
-      state.begin(id);
-      streamAnalysis(id, {
+      state.begin(result.analysisId);
+
+      if (result.events) {
+        result.events.forEach((event) => {
+          if (event.event === 'lens_complete') state.completeLens(event.data as LensCompleteEvent);
+          if (event.event === 'verdict') state.setVerdict(event.data as VerdictResult);
+          if (event.event === 'audio_ready') state.setAsset('audio', (event.data as { url: string }).url);
+          if (event.event === 'card_ready') state.setAsset('card', (event.data as { url: string }).url);
+          if (event.event === 'done') state.finish();
+          if (event.event === 'error') state.fail((event.data as { message: string }).message);
+        });
+        return;
+      }
+
+      streamAnalysis(result.analysisId, {
         lens: state.completeLens,
         verdict: state.setVerdict,
         asset: state.setAsset,

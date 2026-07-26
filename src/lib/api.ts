@@ -1,6 +1,14 @@
 import type { AnalysisState, LensCompleteEvent, VerdictResult } from '../types';
 
-interface StartResponse { analysisId: string }
+export interface AnalysisEvent {
+  event: string;
+  data?: unknown;
+}
+
+interface StartResponse {
+  analysisId: string;
+  events?: AnalysisEvent[];
+}
 
 export async function createAnalysis(state: Pick<AnalysisState, 'contractAddress' | 'chainId' | 'supplyDataRaw' | 'supplyImageBase64'>) {
   const response = await fetch('/api/analyse', {
@@ -15,7 +23,7 @@ export async function createAnalysis(state: Pick<AnalysisState, 'contractAddress
   });
   const payload = await response.json() as StartResponse & { error?: string };
   if (!response.ok) throw new Error(payload.error || 'The analysis could not be started.');
-  return payload.analysisId;
+  return payload;
 }
 
 export function streamAnalysis(

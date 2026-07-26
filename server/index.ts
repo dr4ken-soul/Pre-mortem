@@ -146,6 +146,15 @@ export async function createApp() {
       const id = randomUUID();
       const job: AnalysisJob = { id, request: analysisRequest, events: [], listeners: new Set(), done: false };
       jobs.set(id, job);
+
+      // Vercel can route the POST and a later SSE request to different
+      // serverless instances. Complete the request in one invocation there,
+      // so the deployed app does not depend on an in-memory job map.
+      if (process.env.VERCEL) {
+        await runJob(job);
+        return reply.send({ analysisId: id, events: job.events });
+      }
+
       void runJob(job).catch((error) => {
         app.log.error(error, 'Analysis failed.');
         emit(job, { event: 'error', data: { message: 'The analysis could not be completed.' } });

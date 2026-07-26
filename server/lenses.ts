@@ -34,6 +34,15 @@ type SourceLookup = {
   implementation?: string;
 };
 
+type OklinkMarket = {
+  topThreePercent: number | null;
+  holderCount: number | null;
+  priceUsd: string | null;
+  volume24h: number | null;
+  liquidityUsd: number | null;
+  marketCapUsd: number | null;
+};
+
 function providerFor(chain: AnalysisRequest['chainId']) {
   const configured = chain === 'xlayer' ? process.env.XLAYER_RPC_URL : process.env.BASE_RPC_URL;
   if (configured === '') return null;
@@ -96,6 +105,51 @@ async function oklinkSource(address: string): Promise<SourceLookup | null> {
   } catch (error) {
     return { source: '', abi: '', verified: false, provider: 'OKLink', status: error instanceof Error ? 'request failed' : 'request failed' };
   }
+}
+
+async function oklinkMarket(address: string, chain: AnalysisRequest['chainId']): Promise<OklinkMarket | null> {
+  const apiKey = process.env.OKLINK_API_KEY;
+  const secretKey = process.env.OKLINK_SECRET_KEY;
+  const passphrase = process.env.OKLINK_PASSPHRASE;
+  if (!apiKey || !secretKey || !passphrase || chain !== 'xlayer') return null;
+  const accessKey = apiKey;
+  const signingKey = secretKey;
+  const accessPassphrase = passphrase;
+
+  async function request<T>(requestPath: string): Promise<T | null> {
+    const timestamp = new Date().toISOString();
+    const signature = createHmac('sha256', signingKey).update(`${timestamp}GET${requestPath}`).digest('base64');
+    try {
+      const response = await withTimeout(fetch(`https://web3.okx.com${requestPath}`, {
+        headers: {
+          'OK-ACCESS-KEY': accessKey,
+          'OK-ACCESS-SIGN': signature,
+          'OK-ACCESS-PASSPHRASE': accessPassphrase,
+          'OK-ACCESS-TIMESTAMP': timestamp,
+        },
+      }));
+      if (!response.ok) return null;
+      const json = await response.json() as { code?: string; data?: T };
+      return json.code === '0' ? (json.data ?? null) : null;
+    } catch { return null; }
+  }
+
+  const [holderData, tokenData] = await Promise.all([
+    request<Array<{ circulatingSupply?: string; positionList?: Array<{ amount?: string }> }>>(`/api/v5/xlayer/token/position-list?chainShortName=XLAYER&tokenContractAddress=${encodeURIComponent(address)}&limit=50`),
+    request<Array<{ tokenList?: Array<{ addressCount?: string; price?: string; transactionAmount24h?: string; tvl?: string; totalMarketCap?: string }> }>>(`/api/v5/xlayer/token/token-list?chainShortName=XLAYER&tokenContractAddress=${encodeURIComponent(address)}&limit=1`),
+  ]);
+  const positions = holderData?.[0]?.positionList ?? [];
+  const token = tokenData?.[0]?.tokenList?.[0];
+  const circulatingSupply = Number(holderData?.[0]?.circulatingSupply);
+  const topAmount = positions.slice(0, 3).reduce((sum, position) => sum + Number(position.amount ?? 0), 0);
+  return {
+    topThreePercent: circulatingSupply > 0 && positions.length ? Math.round((topAmount / circulatingSupply) * 10000) / 100 : null,
+    holderCount: token?.addressCount ? Number(token.addressCount) : null,
+    priceUsd: token?.price ?? null,
+    volume24h: token?.transactionAmount24h ? Number(token.transactionAmount24h) : null,
+    liquidityUsd: token?.tvl ? Number(token.tvl) : null,
+    marketCapUsd: token?.totalMarketCap ? Number(token.totalMarketCap) : null,
+  };
 }
 
 async function explorerSource(address: string, chain: AnalysisRequest['chainId']): Promise<SourceLookup | null> {
@@ -309,10 +363,15 @@ export async function marketLens(request: AnalysisRequest): Promise<LensOutput> 
   }
 
   const transfers = await recentTransferData(provider, request.contractAddress, request.chainId, ownerAddress);
-  const liveHolders = await moralisMarket(request.contractAddress, request.chainId);
+  const [liveHolders, oklinkData] = await Promise.all([
+    moralisMarket(request.contractAddress, request.chainId),
+    oklinkMarket(request.contractAddress, request.chainId),
+  ]);
   let topThree: number | null = null;
   if (liveHolders?.result?.length) {
     topThree = Math.round(liveHolders.result.slice(0, 3).reduce((sum, holder) => sum + Number(holder.percentage_relative_to_total_supply ?? 0), 0));
+  } else if (oklinkData?.topThreePercent != null) {
+    topThree = oklinkData.topThreePercent;
   } else if (transfers?.addresses.length) {
     const token = new Contract(request.contractAddress, ERC20_ABI, provider);
     const balances = await Promise.all(transfers.addresses.slice(0, 60).map(async (holder) => {
@@ -323,25 +382,35 @@ export async function marketLens(request: AnalysisRequest): Promise<LensOutput> 
     if (totalSupply > 0n && nonZeroBalances.length) topThree = Math.round(Number((nonZeroBalances.slice(0, 3).reduce((sum, value) => sum + value, 0n) * 10000n) / totalSupply) / 100);
   }
   const liquidity = await dexLiquidity(request.contractAddress, request.chainId);
+  const effectiveLiquidity = liquidity ?? (oklinkData && oklinkData.liquidityUsd !== null && oklinkData.marketCapUsd
+    ? {
+      liquidityUsd: oklinkData.liquidityUsd,
+      ratio: (oklinkData.liquidityUsd / oklinkData.marketCapUsd) * 100,
+      priceUsd: oklinkData.priceUsd,
+      volume24h: oklinkData.volume24h,
+      buys24h: null,
+      sells24h: null,
+    }
+    : null);
   const recentCount = transfers?.logs.length ?? null;
   const scoreParts = [
     topThree === null ? 0 : topThree > 55 ? 35 : topThree > 35 ? 18 : 0,
-    liquidity?.ratio === null || liquidity === null ? 0 : liquidity.ratio < 2 ? 25 : liquidity.ratio < 8 ? 12 : 0,
+    effectiveLiquidity?.ratio === null || effectiveLiquidity === null ? 0 : effectiveLiquidity.ratio < 2 ? 25 : effectiveLiquidity.ratio < 8 ? 12 : 0,
     transfers?.ownerTransfers && transfers.ownerTransfers > 0 ? 20 : 0,
   ];
-  const holderUnavailableValue = liveHolders ? 'unavailable' : 'indexer needed';
+  const holderUnavailableValue = liveHolders || oklinkData ? 'unavailable' : 'indexer needed';
   const findings = [
     { key: 'TOP_HOLDERS', value: topThree === null ? holderUnavailableValue : `${topThree}pct observed`, riskWeight: scoreParts[0] },
     { key: 'RECENT_TRANSFERS', value: recentCount === null ? 'unavailable' : `${recentCount} observed`, riskWeight: 0 },
-    { key: 'LP_DEPTH', value: liquidity?.ratio === null || liquidity === null ? 'unavailable' : `${Math.round(liquidity.ratio)}pct`, riskWeight: scoreParts[1] },
-    { key: 'PRICE_24H', value: liquidity?.priceUsd === null || liquidity === null ? 'unavailable' : `$${liquidity.priceUsd}`, riskWeight: 0 },
-    { key: 'VOLUME_24H', value: liquidity?.volume24h === null || liquidity === null ? 'unavailable' : `$${Math.round(liquidity.volume24h).toLocaleString('en-GB')}`, riskWeight: 0 },
+    { key: 'LP_DEPTH', value: effectiveLiquidity?.ratio === null || effectiveLiquidity === null ? 'unavailable' : `${Math.round(effectiveLiquidity.ratio)}pct`, riskWeight: scoreParts[1] },
+    { key: 'PRICE_24H', value: effectiveLiquidity?.priceUsd === null || effectiveLiquidity === null ? 'unavailable' : `$${effectiveLiquidity.priceUsd}`, riskWeight: 0 },
+    { key: 'VOLUME_24H', value: effectiveLiquidity?.volume24h === null || effectiveLiquidity === null ? 'unavailable' : `$${Math.round(effectiveLiquidity.volume24h).toLocaleString('en-GB')}`, riskWeight: 0 },
     { key: 'OWNER_MOVES', value: transfers?.ownerTransfers ? `${transfers.ownerTransfers} observed` : 'none observed', riskWeight: scoreParts[2] },
   ];
   const score = Math.min(100, scoreParts.reduce((sum, value) => sum + value, 0));
   const holderText = topThree === null ? 'Top holder concentration needs a holder indexer' : `the observed top three holders represent about ${topThree} percent`;
-  const liquidityText = liquidity?.ratio === null || liquidity === null ? 'DEX liquidity was unavailable' : `DEX liquidity is about ${Math.round(liquidity.ratio)} percent of the available market-cap estimate`;
-  const marketText = liquidity?.priceUsd && liquidity.volume24h ? `Price is $${liquidity.priceUsd} with $${Math.round(liquidity.volume24h).toLocaleString('en-GB')} volume over 24 hours.` : 'Price and 24 hour volume were unavailable.';
+  const liquidityText = effectiveLiquidity?.ratio === null || effectiveLiquidity === null ? 'DEX liquidity was unavailable' : `DEX liquidity is about ${Math.round(effectiveLiquidity.ratio)} percent of the available market-cap estimate`;
+  const marketText = effectiveLiquidity?.priceUsd && effectiveLiquidity.volume24h ? `Price is $${effectiveLiquidity.priceUsd} with $${Math.round(effectiveLiquidity.volume24h).toLocaleString('en-GB')} volume over 24 hours.` : 'Price and 24 hour volume were unavailable.';
   return { lens: 'market', score, findings, summary: `${holderText}; ${liquidityText}. ${recentCount === null ? 'Transfer activity was unavailable.' : `${recentCount} recent transfer events were observed.`} ${marketText}` };
 }
 

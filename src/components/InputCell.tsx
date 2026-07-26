@@ -3,9 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useAnalysisStore } from '../store';
 import type { ChainId } from '../types';
 
-interface Props { onSubmit: () => void; openSupply?: boolean }
+interface Props { onSubmit: () => void; openSupply?: boolean; submitting?: boolean }
 
-export function InputCell({ onSubmit, openSupply = false }: Props) {
+export function InputCell({ onSubmit, openSupply = false, submitting = false }: Props) {
   const status = useAnalysisStore((state) => state.systemStatus);
   const address = useAnalysisStore((state) => state.contractAddress);
   const chainId = useAnalysisStore((state) => state.chainId);
@@ -64,8 +64,8 @@ export function InputCell({ onSubmit, openSupply = false }: Props) {
               <div className="chain-selector" aria-label="Select chain">
                 {(['xlayer', 'base'] as ChainId[]).map((chain) => <button key={chain} className={chainId === chain ? 'chain-selected' : ''} type="button" onClick={() => setChain(chain)}>{chain === 'xlayer' ? 'XLAYER' : 'BASE'}</button>)}
               </div>
-              <button className="run-button" type="button" disabled={!address.trim()} onClick={onSubmit}>RUN ANALYSIS</button>
-              <span className="verdict-hint">verdict will appear here</span>
+              <button className="run-button" type="button" disabled={!address.trim() || submitting} aria-busy={submitting} onClick={onSubmit}>{submitting ? 'STARTING...' : 'RUN ANALYSIS'}</button>
+              <span className="verdict-hint">{submitting ? 'connecting to analysis service' : 'verdict will appear here'}</span>
             </div>
           </motion.div>
         )}

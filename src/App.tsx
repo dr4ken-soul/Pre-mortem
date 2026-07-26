@@ -22,8 +22,11 @@ export default function App() {
 function Dashboard() {
   const state = useAnalysisStore();
   const [supplyInCell, setSupplyInCell] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const runAnalysis = useCallback(async () => {
+    if (submitting || state.systemStatus === 'scanning') return;
+    setSubmitting(true);
     try {
       const result = await createAnalysis(state);
       setSupplyInCell(false);
@@ -50,8 +53,10 @@ function Dashboard() {
       });
     } catch (error) {
       state.fail(error instanceof Error ? error.message : 'The analysis could not be started.');
+    } finally {
+      setSubmitting(false);
     }
-  }, [state]);
+  }, [state, submitting]);
 
   const openSupplyCellInput = () => {
     setSupplyInCell(true);
@@ -66,7 +71,7 @@ function Dashboard() {
       <Navigation />
       <Frame>
         <div className="bento-grid">
-          {showInput ? <InputCell onSubmit={() => void runAnalysis()} openSupply={supplyInCell} /> : <VerdictCell />}
+          {showInput ? <InputCell onSubmit={() => void runAnalysis()} openSupply={supplyInCell} submitting={submitting} /> : <VerdictCell />}
           <LensCell name="contract" />
           <LensCell name="market" />
           <LensCell name="supply" onNeedSupply={openSupplyCellInput} />

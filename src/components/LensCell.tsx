@@ -38,6 +38,7 @@ export function LensCell({ name, onNeedSupply }: { name: LensName; onNeedSupply?
   const lens = useLens(name);
   const isScanning = lens.status === 'scanning';
   const isPrompt = name === 'supply' && lens.status === 'prompt';
+  const isUnavailable = lens.status === 'prompt' && name !== 'supply';
   const colour = scoreColour(lens.score);
   return (
     <motion.section className={`lens-cell lens-${name} ${isScanning ? 'lens-scanning' : ''}`} initial={{ opacity: 0, y: 12 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: 0.12 }}>
@@ -54,10 +55,10 @@ export function LensCell({ name, onNeedSupply }: { name: LensName; onNeedSupply?
             <span className="lens-tag">{labels[name]}</span>
             <div className="prompt-copy">Add a vesting schedule to complete supply analysis.<button type="button" onClick={onNeedSupply}>PASTE TEXT OR UPLOAD IMAGE</button></div>
           </motion.div>
-        ) : lens.status === 'complete' ? (
+        ) : lens.status === 'complete' || isUnavailable ? (
           <motion.div className="lens-content" key="complete" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: name === 'contract' ? 0 : name === 'market' ? 0.08 : 0.16 }}>
             <span className="lens-tag">{labels[name]}</span>
-            <div className="score" style={{ color: colour }}><ScoreCount score={lens.score ?? 0} /></div>
+            <div className="score" style={{ color: colour }}>{lens.score === null ? 'N/A' : <ScoreCount score={lens.score} />}</div>
             <p className="finding-summary">{lens.summary}</p>
             <div className="callout-list">{lens.findings.slice(0, 4).map((finding) => <div className="callout-row" key={`${finding.key}-${finding.value}`}><span className="callout-key">{finding.key.replaceAll('_', ' ')}</span><i className="callout-dot" style={{ backgroundColor: colour }} /><span className="callout-line" /><span className="callout-value">{finding.value}</span></div>)}</div>
           </motion.div>

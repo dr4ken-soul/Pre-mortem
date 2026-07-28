@@ -41,6 +41,7 @@ type OklinkMarket = {
   volume24h: number | null;
   liquidityUsd: number | null;
   marketCapUsd: number | null;
+  providerStatus?: string;
 };
 
 function providerFor(chain: AnalysisRequest['chainId']) {
@@ -145,21 +146,27 @@ async function oklinkMarket(address: string, chain: AnalysisRequest['chainId']):
     price?: string;
     marketCap?: string;
     liquidity?: string;
-    volume24h?: string;
+    volume24H?: string;
+    tradeNum?: string;
     holders?: string;
   }>>('/api/v6/dex/market/price-info', 'POST', JSON.stringify([{ chainIndex: '196', tokenContractAddress: address.toLowerCase() }]));
+  const liquidityInfo = await request<Array<{
+    liquidityUsd?: string;
+  }>>(`/api/v6/dex/market/token/top-liquidity?chainIndex=196&tokenContractAddress=${encodeURIComponent(address.toLowerCase())}`);
   const positions = holderData?.[0]?.positionList ?? [];
   const token = tokenData?.[0]?.tokenList?.[0];
   const circulatingSupply = Number(holderData?.[0]?.circulatingSupply);
   const topAmount = positions.slice(0, 3).reduce((sum, position) => sum + Number(position.amount ?? 0), 0);
   const market = priceInfo?.[0];
+  const topPoolLiquidity = liquidityInfo?.reduce((sum, pool) => sum + Number(pool.liquidityUsd ?? 0), 0) || null;
   return {
     topThreePercent: circulatingSupply > 0 && positions.length ? Math.round((topAmount / circulatingSupply) * 10000) / 100 : null,
     holderCount: market?.holders ? Number(market.holders) : token?.addressCount ? Number(token.addressCount) : null,
     priceUsd: market?.price ?? token?.price ?? null,
-    volume24h: market?.volume24h ? Number(market.volume24h) : token?.transactionAmount24h ? Number(token.transactionAmount24h) : null,
-    liquidityUsd: market?.liquidity ? Number(market.liquidity) : token?.tvl ? Number(token.tvl) : null,
+    volume24h: market?.volume24H ? Number(market.volume24H) : market?.tradeNum ? Number(market.tradeNum) : token?.transactionAmount24h ? Number(token.transactionAmount24h) : null,
+    liquidityUsd: market?.liquidity ? Number(market.liquidity) : topPoolLiquidity || (token?.tvl ? Number(token.tvl) : null),
     marketCapUsd: market?.marketCap ? Number(market.marketCap) : token?.totalMarketCap ? Number(token.totalMarketCap) : null,
+    providerStatus: positions.length || market || token || topPoolLiquidity ? 'OKLink data received' : 'OKLink returned no market record for this token',
   };
 }
 
@@ -410,7 +417,7 @@ export async function marketLens(request: AnalysisRequest): Promise<LensOutput> 
     effectiveLiquidity?.ratio === null || effectiveLiquidity === null ? 0 : effectiveLiquidity.ratio < 2 ? 25 : effectiveLiquidity.ratio < 8 ? 12 : 0,
     transfers?.ownerTransfers && transfers.ownerTransfers > 0 ? 20 : 0,
   ];
-  const holderUnavailableValue = liveHolders || oklinkData ? 'unavailable' : 'indexer needed';
+  const holderUnavailableValue = liveHolders || oklinkData?.holderCount !== null ? 'unavailable' : 'provider unavailable';
   const findings = [
     { key: 'TOP_HOLDERS', value: topThree === null ? holderUnavailableValue : `${topThree}pct observed`, riskWeight: scoreParts[0] },
     { key: 'RECENT_TRANSFERS', value: recentCount === null ? 'unavailable' : `${recentCount} observed`, riskWeight: 0 },
@@ -420,7 +427,7 @@ export async function marketLens(request: AnalysisRequest): Promise<LensOutput> 
     { key: 'OWNER_MOVES', value: transfers?.ownerTransfers ? `${transfers.ownerTransfers} observed` : 'none observed', riskWeight: scoreParts[2] },
   ];
   const score = Math.min(100, scoreParts.reduce((sum, value) => sum + value, 0));
-  const holderText = topThree === null ? 'Top holder concentration needs a holder indexer' : `the observed top three holders represent about ${topThree} percent`;
+  const holderText = topThree === null ? (oklinkData?.providerStatus ?? 'Top holder data was unavailable') : `the observed top three holders represent about ${topThree} percent`;
   const liquidityText = effectiveLiquidity?.ratio === null || effectiveLiquidity === null ? 'DEX liquidity was unavailable' : `DEX liquidity is about ${Math.round(effectiveLiquidity.ratio)} percent of the available market-cap estimate`;
   const marketText = effectiveLiquidity?.priceUsd && effectiveLiquidity.volume24h ? `Price is $${effectiveLiquidity.priceUsd} with $${Math.round(effectiveLiquidity.volume24h).toLocaleString('en-GB')} volume over 24 hours.` : 'Price and 24 hour volume were unavailable.';
   return { lens: 'market', score, findings, summary: `${holderText}; ${liquidityText}. ${recentCount === null ? 'Transfer activity was unavailable.' : `${recentCount} recent transfer events were observed.`} ${marketText}` };

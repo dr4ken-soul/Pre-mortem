@@ -426,7 +426,8 @@ export async function marketLens(request: AnalysisRequest): Promise<LensOutput> 
     { key: 'VOLUME_24H', value: effectiveLiquidity?.volume24h === null || effectiveLiquidity === null ? 'unavailable' : `$${Math.round(effectiveLiquidity.volume24h).toLocaleString('en-GB')}`, riskWeight: 0 },
     { key: 'OWNER_MOVES', value: transfers?.ownerTransfers ? `${transfers.ownerTransfers} observed` : 'none observed', riskWeight: scoreParts[2] },
   ];
-  const score = Math.min(100, scoreParts.reduce((sum, value) => sum + value, 0));
+  const hasMarketEvidence = topThree !== null || effectiveLiquidity !== null;
+  const score = hasMarketEvidence ? Math.min(100, scoreParts.reduce((sum, value) => sum + value, 0)) : null;
   const holderText = topThree === null ? (oklinkData?.providerStatus ?? 'Top holder data was unavailable') : `the observed top three holders represent about ${topThree} percent`;
   const liquidityText = effectiveLiquidity?.ratio === null || effectiveLiquidity === null ? 'DEX liquidity was unavailable' : `DEX liquidity is about ${Math.round(effectiveLiquidity.ratio)} percent of the available market-cap estimate`;
   const marketText = effectiveLiquidity?.priceUsd && effectiveLiquidity.volume24h ? `Price is $${effectiveLiquidity.priceUsd} with $${Math.round(effectiveLiquidity.volume24h).toLocaleString('en-GB')} volume over 24 hours.` : 'Price and 24 hour volume were unavailable.';
